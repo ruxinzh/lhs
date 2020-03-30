@@ -8,9 +8,10 @@ const
   ValueCount: 2;
   VC0: 0;                -- low priority
   VC1: 1;
-  VC2: 2;                               
+  VC2: 2;                
+  VC3: 3;
   QMax: 2;
-  NumVCs: VC2 - VC0 + 1;
+  NumVCs: VC3 - VC0 + 1;
   NetMax: ProcCount+1;
   
 
@@ -20,36 +21,30 @@ const
 type
   Proc: scalarset(ProcCount);   -- unordered range of processors
   Home: enum { HomeType };      -- need enumeration for IsMember calls
-  Node: union { Home , Proc };
-  Value: scalarset(ValueCount);
+  Node: union { Home , Proc }; -- arbitrary values for tracking coherence
+  Value: scalarset(ValueCount); -- need enumeration for IsMember calls
 
-  VCType: VC0..NumVCs-1;
+  VCType: VC1..NumVCs-1;
 
   MessageType: enum {  GetS,         
                        FwdGetS,      
                        GetSAck,         
                        FwdGetSAck,      
-		                   GetSFwd,         
+		                   GetSFwd,        
 
 		                   GetM,        
-                       FwdGetM,     
-                       GetMAck,        
-                       FwdGetMAck,     
-		                   GetMFwd,        
+                       FwdGetM,    
+                       GetMAck,       
+                       FwdGetMAck,    
+		                   GetMFwd,      
                       
 		                   WBReq,           
-                       WBAck,                
+                       WBAck,           
                        WBStaleReadAck,  
                        WBStaleWriteAck, 
  
                        InvReq,         
-                       InvAck,            
-		      
-                       	FwdShareReq,
-			FwdShareAck,
-			PutE,
-			PutEAck
-
+                       InvAck            
                     };
 
   Message:
@@ -65,7 +60,7 @@ type
 
   HomeState:
     Record
-      state: enum { HM, HS, HI,HE, TMM, TMS,TES,TEM,TEMM,TEE };
+      state: enum { HM, HS, HI, TMM, TSD };
       owner: Node;	
       pending_node: Node;
       sharers: multiset [ProcCount] of Node; 
@@ -74,15 +69,14 @@ type
 
   ProcState:
     Record
-      state: enum { PM, PS, PI, 
-                    TIS, TIL,         
-		                IM, IIM, TRIS, TRIF, TMI, TMII, TWIS, TWIF,
-                    PE,TEI,TEII,IEM,IEMI,  TISS  
+      state: enum { PM, PS, PI,
+                    TIS, TIL,        
+		                IM, IIM, TRIS, TRIF, TMI, TMII, TWIS, TWIF    
+                                    
                   };
-      
-      acount: 0..ProcCount;
-      icount: 0..ProcCount;
-      val:Value;
+    count1: 0..ProcCount;
+    count2: 0..ProcCount;                 
+    val:Value;
     End;
 
 ----------------------------------------------------------------------
@@ -92,7 +86,6 @@ var
   HomeNode:  HomeState;
   Procs: array [Proc] of ProcState;
   Net:   array [Node] of multiset [NetMax] of Message;
---  InBox: array [Node] of array [VCType] of Message;
   msg_processed: boolean;
   LastWrite: Value;
 
@@ -154,7 +147,7 @@ Begin
     then
       if n != rqst
       then
-        Send(InvReq, n, HomeType, VC2, rqst,HomeNode.val, UNDEFINED);
+        Send(InvReq, n, HomeType, VC3, rqst,HomeNode.val, UNDEFINED);
       endif;
       RemoveFromSharersList(n);
     endif;
@@ -188,22 +181,17 @@ Begin
     switch msg.mtype
 
     case GetS:
-      HomeNode.state := HE;
-      HomeNode.owner := msg.src;
-      Send(GetSAck, msg.src, HomeType, VC2, msg.src,HomeNode.val,0);--cnt 0 TIS->PE
+      HomeNode.state := HS;
+      AddToSharersList(msg.src);
+      Send(GetSAck, msg.src, HomeType, VC3, UNDEFINED,HomeNode.val,UNDEFINED);
 
     case GetM:
-	if Isundefined(msg.cnt)
-	then 
       HomeNode.state := HM;
       HomeNode.owner := msg.src;
       HomeNode.val   := msg.val;
-      Send(GetMAck, msg.src, HomeType, VC2, UNDEFINED,HomeNode.val,cnt); -- cnt is zero
-	else 
-      HomeNode.state := HI;
-      Send(GetMAck, msg.src, HomeType, VC2, UNDEFINED,HomeNode.val,cnt); -- cnt is zero
-	endif;
-   else
+      Send(GetMAck, msg.src, HomeType, VC3, UNDEFINED,HomeNode.val,cnt); -- cnt is zero
+
+    else
       ErrorUnhandledMsg(msg, HomeType);
 
     endswitch;
@@ -215,22 +203,24 @@ Begin
     switch msg.mtype
 
     case GetS:
-      HomeNode.state := TMS; 
+      HomeNode.state := TSD; 
       AddToSharersList(msg.src);    
       HomeNode.pending_node := msg.src;
-      Send(FwdGetS, HomeNode.owner, HomeType, VC2, msg.src,UNDEFINED,cnt);
+      Send(FwdGetS, HomeNode.owner, HomeType, VC3, msg.src,UNDEFINED,UNDEFINED);
       
     case GetM:
       HomeNode.state := TMM;
       HomeNode.pending_node := msg.src;
       HomeNode.val   := msg.val;
-      Send(FwdGetM, HomeNode.owner, HomeType, VC2, msg.src,HomeNode.val,1);
+      Send(FwdGetM, HomeNode.owner, HomeType, VC3, msg.src,UNDEFINED,UNDEFINED);
       
     case WBReq:
+      --RemoveFromSharersList(msg.src);
       HomeNode.state := HI;
       HomeNode.val   := msg.val;
       HomeNode.owner := UNDEFINED;
-      Send(WBAck, msg.src, HomeType, VC2, UNDEFINED,UNDEFINED,UNDEFINED);
+      Send(WBAck, msg.src, HomeType, VC3, UNDEFINED,UNDEFINED,UNDEFINED);
+
     else
       ErrorUnhandledMsg(msg, HomeType);
 
@@ -243,176 +233,29 @@ Begin
 
     case GetS:
       AddToSharersList(msg.src);
-      Send(GetSAck, msg.src, HomeType, VC2, UNDEFINED,HomeNode.val,1);
+      Send(GetSAck, msg.src, HomeType, VC3, UNDEFINED,HomeNode.val,UNDEFINED);
 
     case GetM:
-	if Isundefined(msg.cnt) 
-	then 
+      --RemoveFromSharersList(msg.src);
       HomeNode.state := HM;
+      --HomeNode.owner := UNDEFINED;
       HomeNode.val   := msg.val;
-      Send(GetMAck, msg.src, HomeType, VC2, UNDEFINED,UNDEFINED,cnt-cnthack);        
+      Send(GetMAck, msg.src, HomeType, VC3, UNDEFINED,UNDEFINED,cnt-cnthack);        
       SendInvReqToSharers(msg.src); -- removes sharers, too
       HomeNode.owner := msg.src;
-      	else 
-	Send(GetMAck, msg.src, HomeType, VC2, UNDEFINED,UNDEFINED,UNDEFINED); 
-	endif;
+      
     else
       ErrorUnhandledMsg(msg, HomeType);
 
     endswitch;
-    
-  case HE:
-    Assert (IsUndefined(HomeNode.owner)=false) 
-    "HomeNode has no owner, but line is Exclusive";
 
-    switch msg.mtype
-
-    case GetS:
-      HomeNode.state := TES;
-      AddToSharersList(msg.src);
-      HomeNode.pending_node := msg.src;
-      Send(FwdShareReq, HomeNode.owner, HomeType, VC2, UNDEFINED,HomeNode.val,cnt);
-
-    case GetM:
-      if HomeNode.owner = msg.src
-      then 
-	HomeNode.state := HM;
-	HomeNode.val   := msg.val;
-	Send(GetMAck,HomeNode.owner,HomeType,VC2,msg.src,UNDEFINED,cnt);
-      else
-	if(Isundefined(msg.cnt)) 
-	then 
-	HomeNode.state := TEM;
-	HomeNode.pending_node := msg.src;
-	HomeNode.val := msg.val;
-	Send(FwdGetM,HomeNode.owner,HomeType,VC2,msg.src,HomeNode.val,UNDEFINED);
-	else
-	Send(GetMAck,msg.src,HomeType,VC2,msg.src,UNDEFINED,UNDEFINED); 
-	endif;
-      endif;
-
-    case PutE: 
-	HomeNode.state := HI;
-	HomeNode.owner := UNDEFINED;
-	Send(PutEAck, msg.src,HomeType,VC2,UNDEFINED,UNDEFINED,0); --cnt 0 from HE      
-   case FwdShareAck:
-	HomeNode.state := HE;
-   else
-      ErrorUnhandledMsg(msg, HomeType);
-
-    endswitch;
-
-  case TES:
-    switch msg.mtype
-
-    case FwdShareAck:
-	if (msg.cnt = 0)
-	then 
-		HomeNode.state := TEE;
-		
-	elsif (msg.cnt = 1)
-	then 
-      HomeNode.state := HS;
-      AddToSharersList(msg.src);
-      Send(GetSAck,HomeNode.pending_node,HomeType,VC2,UNDEFINED,HomeNode.val,1);
-      undefine HomeNode.owner;
-	elsif (msg.cnt = 2)
-	then 
-	HomeNode.state := HE;
-	Send(GetSAck,HomeNode.pending_node,HomeType,VC2,UNDEFINED,HomeNode.val,2); --inv TIS
-	RemoveFromSharersList(HomeNode.pending_node);
-	HomeNode.pending_node := UNDEFINED;    
-	endif;
-    case PutE:
-      Assert (!IsUnDefined(HomeNode.pending_node)) "pending_node undefined";
-      HomeNode.state := TEE;
-      RemoveFromSharersList(HomeNode.pending_node);
-      HomeNode.owner := HomeNode.pending_node;
-      Send(PutEAck,msg.src,HomeType,VC2,UNDEFINED,UNDEFINED,1); --cnt 1 from TES
-    
-    else
-      ErrorUnhandledMsg(msg, HomeType);
-
-    endswitch;
-  
-  case TEE:
-	switch msg.mtype
-	case FwdShareAck : 
-	HomeNode.state := HE;
-     	Send(GetSAck,HomeNode.pending_node,HomeType,VC2,UNDEFINED,HomeNode.val,0);
-	undefine HomeNode.pending_node;
-    case PutE:
-      Assert (!IsUnDefined(HomeNode.pending_node)) "pending_node undefined";
-      HomeNode.state := HE;
-      RemoveFromSharersList(HomeNode.pending_node);
-      HomeNode.owner := HomeNode.pending_node;
-      Send(PutEAck,msg.src,HomeType,VC2,UNDEFINED,UNDEFINED,1); --cnt 1 from TES
- 
-	else 
-	ErrorUnhandledMsg(msg,HomeType);
-	endswitch;
-	  
-  case TEM:
-    switch msg.mtype
-
-    case FwdGetMAck:
-	if Isundefined(msg.cnt) 
-	then 
-      Assert (!IsUnDefined(HomeNode.pending_node)) "pending_node undefined";
-      HomeNode.state := HM;
-      HomeNode.owner := HomeNode.pending_node;
-      Send(GetMAck,HomeNode.owner,HomeType,VC2,UNDEFINED,UNDEFINED,cnt);
-      undefine HomeNode.pending_node;
-	else 
-	HomeNode.state:= TEMM;
-	endif;
-    case PutE:
-      if HomeNode.owner = msg.src
-      then
-        Assert (!IsUnDefined(HomeNode.pending_node)) "pending_node undefined";
-	Send(PutEAck, msg.src, HomeType, VC2, UNDEFINED,UNDEFINED,1);
-	HomeNode.state:=TEMM;
-      else
-        error "PutE from unexpected node";
-      endif;
-
-    else
-      ErrorUnhandledMsg(msg, HomeType);
-    
-    endswitch;
-
-  case TEMM:
-	switch msg.mtype
-	case FwdGetMAck:
-	Assert (!IsUnDefined(HomeNode.pending_node)) "pending_node undefined";
-      	HomeNode.state := HM;
-     	HomeNode.owner := HomeNode.pending_node;
-      	Send(GetMAck,HomeNode.owner,HomeType,VC2,UNDEFINED,UNDEFINED,cnt);
-      	undefine HomeNode.pending_node;
-	
-	case PutE:
-      if HomeNode.owner = msg.src
-      then
-        Assert (!IsUnDefined(HomeNode.pending_node)) "pending_node undefined";
-	Send(PutEAck, msg.src, HomeType, VC2, UNDEFINED,UNDEFINED,1);
-      	Send(GetMAck,HomeNode.pending_node,HomeType,VC2,UNDEFINED,UNDEFINED,cnt);
-	HomeNode.state := HM;
-	HomeNode.owner := HomeNode.pending_node;
-	HomeNode.pending_node := UNDEFINED;
-      else
-        error "PutE from unexpected node";
-      endif;
-	else 
-	ErrorUnhandledMsg(msg,HomeType);
-	endswitch;
-
-
-  case TMS:
+  case TSD:
     switch msg.mtype
 
     case FwdGetSAck:
       HomeNode.state := HS;
       AddToSharersList(msg.src);
+      --AddToSharersList(msg.aux);
       HomeNode.val := msg.val;
       undefine HomeNode.owner;
     
@@ -421,7 +264,7 @@ Begin
       HomeNode.state := HS;
       HomeNode.val   := msg.val;
       AddToSharersList(HomeNode.pending_node);
-      Send(WBStaleReadAck, msg.src, HomeType, VC2, UNDEFINED,UNDEFINED,UNDEFINED);
+      Send(WBStaleReadAck, msg.src, HomeType, VC3, UNDEFINED,UNDEFINED,UNDEFINED);
       undefine HomeNode.owner;
       undefine HomeNode.pending_node;
     
@@ -444,9 +287,10 @@ Begin
       then
         -- old owner
         Assert (!IsUnDefined(HomeNode.pending_node)) "pending_node undefined";
-	Send(WBStaleWriteAck, msg.src, HomeType, VC2, UNDEFINED,UNDEFINED,UNDEFINED);
+	Send(WBStaleWriteAck, msg.src, HomeType, VC3, UNDEFINED,UNDEFINED,UNDEFINED);
 	HomeNode.state := HM;
 	HomeNode.owner := HomeNode.pending_node;
+	--HomeNode.val   := msg.val;
 	undefine HomeNode.pending_node;
       elsif HomeNode.pending_node = msg.src
       then
@@ -480,11 +324,7 @@ Begin
 
     switch msg.mtype
     case InvReq:
-      Send(InvAck, msg.aux, p, VC2, UNDEFINED,UNDEFINED,UNDEFINED);
-    case FwdGetM:
-      Send(FwdGetMAck,msg.src,p,VC2,UNDEFINED,UNDEFINED,UNDEFINED);
-    case FwdShareReq:
-      ps := PI; 
+      Send(InvAck, msg.aux, p, VC3, UNDEFINED,UNDEFINED,UNDEFINED);
     else
       ErrorUnhandledMsg(msg, p);
     endswitch;
@@ -493,12 +333,12 @@ Begin
 
     switch msg.mtype
     case FwdGetM:
-      Send(FwdGetMAck, HomeType, p, VC2, UNDEFINED,pv,UNDEFINED);
-      Send(GetMFwd, msg.aux, p, VC2, UNDEFINED,pv,UNDEFINED);
+      Send(FwdGetMAck, HomeType, p, VC3, UNDEFINED,pv,UNDEFINED);
+      Send(GetMFwd, msg.aux, p, VC3, UNDEFINED,pv,UNDEFINED);
       ps := PI;
     case FwdGetS:
-      Send(FwdGetSAck, HomeType, p, VC2, UNDEFINED,pv, UNDEFINED);
-      Send(GetSFwd, msg.aux, p, VC2, UNDEFINED,pv, UNDEFINED);
+      Send(FwdGetSAck, HomeType, p, VC3, UNDEFINED,pv, UNDEFINED);
+      Send(GetSFwd, msg.aux, p, VC3, UNDEFINED,pv, UNDEFINED);
       ps := PS;
     else
       ErrorUnhandledMsg(msg, p);
@@ -508,78 +348,10 @@ Begin
 
     switch msg.mtype
     case InvReq:
-      Send(InvAck, msg.aux, p, VC2, UNDEFINED,UNDEFINED,UNDEFINED);
+      Send(InvAck, msg.aux, p, VC3, UNDEFINED,UNDEFINED,UNDEFINED);
       ps := PI;
       pv := msg.val;
-    else
-      ErrorUnhandledMsg(msg, p);
-    endswitch;
-
- case PE:
-
-    switch msg.mtype
-    case FwdGetM:
-      Send(FwdGetMAck, HomeType, p, VC2, UNDEFINED,pv,UNDEFINED); --cnt 1 from PE
-      ps := PI;
-    case FwdShareReq:
-      Send(FwdShareAck,HomeType,p,VC2,UNDEFINED,pv,1); --cnt 1 form PE
-      ps := PS;
-    else
-      ErrorUnhandledMsg(msg, p);
-    endswitch;
-
-  case TIS:
-
-    switch msg.mtype
-    case GetSAck:
-      pv := msg.val;
-      if msg.cnt = 0
-	then
-      ps := PE;
-      elsif msg.cnt=1
-	then
-      ps := PS;
-	elsif msg.cnt=2
-	then
-	ps := PI;
-      endif;
-    case FwdShareReq:
-	Send(FwdShareAck,msg.src,p,VC2,UNDEFINED,UNDEFINED,1); --cnt = 1 Form TIS
-	ps := TISS;
-    case FwdGetM:
-	ps:= TIL;
-	Send(FwdGetMAck,msg.src,p,VC2,UNDEFINED,UNDEFINED,UNDEFINED);
-    case GetSFwd:
-      pv := msg.val;
-      ps := PS;
-    case InvReq:
-      Send(InvAck, msg.aux, p, VC2, UNDEFINED, UNDEFINED,UNDEFINED);
-      ps := TIL;
-    else
-      ErrorUnhandledMsg(msg, p);
-    endswitch;
-
-  case TISS:
-	switch msg.mtype
-	case GetSAck:
-	ps:=PS;
-	pv:=msg.val;
-	case InvReq:
-	Send(InvAck,msg.aux,p,VC2,UNDEFINED,UNDEFINED,UNDEFINED);
-	ps := TIL;
-	else 
-	ErrorUnhandledMsg(msg,p);
-	endswitch;
-	
-  case TIL:
-   
-    switch msg.mtype
-    case GetSAck:
-	ps := PI;
-    case GetSFwd:
-      ps := PI;
-    case InvReq:
-      Send(InvAck, msg.aux, p, VC2, UNDEFINED,UNDEFINED,UNDEFINED);
+    --  LastWrite := msg.val;
     else
       ErrorUnhandledMsg(msg, p);
     endswitch;
@@ -590,125 +362,66 @@ Begin
     case GetMFwd:
       pv := msg.val;
       ps := PM;
-      LastWrite := msg.val;
     case GetMAck:
-      Procs[p].icount := msg.cnt;
-      if Procs[p].acount = Procs[p].icount
+      Procs[p].count2 := msg.cnt;
+      if Procs[p].count1 = Procs[p].count2
       then
 	      ps := PM;
              -- pv := msg.val;
               LastWrite := pv;
-	      undefine Procs[p].acount;
-	      undefine Procs[p].icount;
+	      undefine Procs[p].count1;
+	      undefine Procs[p].count2;
       else
         ps := IIM;
       endif;
     case InvAck:
-      Procs[p].acount := Procs[p].acount + 1;
+      Procs[p].count1 := Procs[p].count1 + 1;
     case InvReq:
-      Send(InvAck, msg.aux, p, VC2, UNDEFINED, UNDEFINED,UNDEFINED);
-    case FwdGetS:
-	msg_processed:=false;
-    case FwdGetM:
-    msg_processed := false;
-    --  Send(FwdGetMAck,msg.src,p,VC2,UNDEFINED,UNDEFINED,1);
-    case FwdShareReq:
-	Send(FwdShareAck,msg.src,p,VC2,UNDEFINED,UNDEFINED,1);
+      Send(InvAck, msg.aux, p, VC3, UNDEFINED, UNDEFINED,UNDEFINED);
+    case FwdGetS, FwdGetM:
+      msg_processed := false;
     else
       ErrorUnhandledMsg(msg, p);
     endswitch;
-
-  case IEM:
-    
-    switch msg.mtype
-    case GetMFwd:
-      pv := msg.val;
-      ps := PM;
-    case GetMAck:
-	ps := PM;
-     	LastWrite := pv;
-    case InvAck:
-      Procs[p].acount := Procs[p].acount + 1;
-    case InvReq:
-      Send(InvAck, msg.aux, p, VC2, UNDEFINED, UNDEFINED,UNDEFINED);
-    case FwdShareReq :
-      Send(FwdShareAck,msg.src,p,VC2,UNDEFINED,UNDEFINED,2); --cnt=2 from IEM
-    case FwdGetS:
- 	msg_processed := false; 
-    case FwdGetM:
-	ps := IEMI;
-     	Send(FwdGetMAck,msg.src,p,VC2,UNDEFINED,UNDEFINED,UNDEFINED);
-	if ( ! Isundefined(msg.cnt))
-	then 
-        Send(GetMFwd,msg.aux,p,VC2,UNDEFINED,msg.val,UNDEFINED);
-	endif
-    else
-      ErrorUnhandledMsg(msg, p);
-    endswitch;
-
-  case IEMI:
-	switch msg.mtype
-	case GetMAck:
-	ps:=PI;
-	case GetMFwd:
-	ps:=PM;
-        LastWrite := pv;
-	case FwdShareReq,FwdGetM,FwdGetS:
-	msg_processed := false;
-	else 
-	ErrorUnhandledMsg(msg,p);
-	endswitch;
- 
-  case TEI:
-    switch msg.mtype
-    case PutEAck:
-	if msg.cnt = 0 
-	then 
-	ps := PI;
-	else 
-	ps := TEII;
-	endif;
-    case FwdGetM:
-	ps := TEII;
-	Send(FwdGetMAck,msg.src,p,VC2,UNDEFINED,UNDEFINED,0);--cnt 0 ack from TEI
-    case FwdShareReq:
-	ps := TEII;
-	Send(FwdShareAck,msg.src,p,VC2,UNDEFINED,UNDEFINED,0); --cnt 0 ack from TEI
-    else 
-      ErrorUnhandledMsg(msg,p);
-    endswitch;
-
-    case TEII:
-	switch msg.mtype
-	case PutEAck:
-	ps := PI; 
-	case FwdShareReq:
-	Send(FwdShareAck,msg.src,p,VC2,UNDEFINED,UNDEFINED,UNDEFINED);
-	ps:=PI;
-	case FwdGetM:
-	ps := PI;
-	Send(FwdGetMAck,msg.src,p,VC2,UNDEFINED,UNDEFINED,UNDEFINED);
-	else 
-	ErrorUnhandledMsg(msg,p);
-
-	endswitch;
----------------------------------------------------------------------------
 
   case IIM:
 
     switch msg.mtype
     case InvAck:
-      Procs[p].acount := Procs[p].acount + 1;
-      -- we've already received the GetMAck, so go to M if acount = icount
-      if Procs[p].acount = Procs[p].icount
+      Procs[p].count1 := Procs[p].count1 + 1;
+      if Procs[p].count1 = Procs[p].count2
       then
 	      ps := PM;
               LastWrite := pv;
-	      undefine Procs[p].acount;
-	      undefine Procs[p].icount;
+	      undefine Procs[p].count1;
+	      undefine Procs[p].count2;
       endif
     case FwdGetS, FwdGetM:
       msg_processed := false;
+    else
+      ErrorUnhandledMsg(msg, p);
+    endswitch;
+
+  case TIS:
+
+    switch msg.mtype
+    case GetSAck, GetSFwd:
+      pv := msg.val;
+      ps := PS;
+    case InvReq:
+      Send(InvAck, msg.aux, p, VC3, UNDEFINED, UNDEFINED,UNDEFINED);
+      ps := TIL;
+    else
+      ErrorUnhandledMsg(msg, p);
+    endswitch;
+
+  case TIL:
+   
+    switch msg.mtype
+    case GetSAck, GetSFwd:
+      ps := PI;
+    case InvReq:
+      Send(InvAck, msg.aux, p, VC3, UNDEFINED,UNDEFINED,UNDEFINED);
     else
       ErrorUnhandledMsg(msg, p);
     endswitch;
@@ -719,17 +432,17 @@ Begin
     case WBAck:
       ps := PI;
     case InvReq:
-      Send(InvAck, msg.aux, p, VC2, UNDEFINED,UNDEFINED,UNDEFINED);
+      Send(InvAck, msg.aux, p, VC3, UNDEFINED,UNDEFINED,UNDEFINED);
       ps := TMII;
     case WBStaleReadAck:
       ps := TRIS;
     case FwdGetS:
-      Send(GetSFwd, msg.aux, p, VC2, UNDEFINED,pv,UNDEFINED);
+      Send(GetSFwd, msg.aux, p, VC3, UNDEFINED,pv,UNDEFINED);
       ps := TRIF;
     case WBStaleWriteAck:
       ps := TWIS;
     case FwdGetM:
-      Send(GetMFwd, msg.aux, p, VC2, UNDEFINED,pv,UNDEFINED);
+      Send(GetMFwd, msg.aux, p, VC3, UNDEFINED,pv,UNDEFINED);
       ps := TWIF;
     else
       ErrorUnhandledMsg(msg, p);
@@ -747,7 +460,7 @@ Begin
     switch msg.mtype
     case FwdGetS:
       ps := PI;
-      Send(GetSFwd, msg.aux, p, VC2, UNDEFINED,pv,UNDEFINED);
+      Send(GetSFwd, msg.aux, p, VC3, UNDEFINED,pv,UNDEFINED);
     else
       ErrorUnhandledMsg(msg, p);
     endswitch;
@@ -764,7 +477,7 @@ Begin
     switch msg.mtype
     case FwdGetM:
       ps := PI;
-      Send(GetMFwd, msg.aux, p, VC2, UNDEFINED, pv,UNDEFINED);
+      Send(GetMFwd, msg.aux, p, VC3, UNDEFINED, pv,UNDEFINED);
     else
       ErrorUnhandledMsg(msg, p);
     endswitch;
@@ -802,25 +515,31 @@ ruleset n:Proc Do
   rule "read request PI"
     p.state = PI 
   ==>
-    Send(GetS, HomeType, n, VC0, UNDEFINED,UNDEFINED,UNDEFINED);
+    Send(GetS, HomeType, n, VC1, UNDEFINED,UNDEFINED,UNDEFINED);
     p.state := TIS;
   endrule;
 
-  rule "write request PI"
-    (p.state = PI)
-  ==>
-    Send(GetM, HomeType, n, VC0, UNDEFINED,v, UNDEFINED);
-    p.state := IM;
-    p.val   := v;
-    clear p.acount;
-    clear p.icount;
-  endrule;
   rule "read request PS"
     p.state = PS 
   ==>
     p.state := PS;
   endrule;
 
+  rule "read request PM"
+    p.state = PM 
+  ==>
+    p.state := PM
+  endrule;
+
+  rule "write request PI"
+    (p.state = PI)
+  ==>
+    Send(GetM, HomeType, n, VC1, UNDEFINED,v, UNDEFINED);
+    p.state := IM;
+    p.val   := v;
+    clear p.count1;
+    clear p.count2;
+  endrule;
 
   rule "write request PM"
     (p.state = PM)
@@ -829,36 +548,27 @@ ruleset n:Proc Do
     LastWrite := v;
   endrule;
 
-  rule "write request PE"
-    (p.state = PE)
-  ==>
-    Send(GetM,HomeType,n,VC0,UNDEFINED,v,1);
-    p.state := IEM;
-    p.val := v;
-  endrule;
-
   rule "write request PS"
     (p.state = PS)
   ==>
-    Send(GetM, HomeType, n, VC0, UNDEFINED,v,UNDEFINED);
+    Send(GetM, HomeType, n, VC1, UNDEFINED,v,UNDEFINED);
     p.state := IM;  -- collapsing states from Nikos' diagrams
     p.val   := v;
-    clear p.acount;
-    clear p.icount;
+    clear p.count1;
+    clear p.count2;
   endrule;
 
   rule "writeback"
     (p.state = PM)
   ==>
-    Send(WBReq, HomeType, n, VC2, UNDEFINED,p.val,UNDEFINED);  -- fixme
+    Send(WBReq, HomeType, n, VC3, UNDEFINED,p.val,UNDEFINED);  -- fixme
     p.state := TMI;
   endrule;
 
   rule "evict"
-    (p.state = PE)
+    (p.state = PS)
   ==>
-    Send(PutE,HomeType,n,VC2,UNDEFINED,p.val,UNDEFINED);
-    p.state := TEI;
+    p.state := PI;
   endrule;
   
   endruleset;
@@ -873,9 +583,12 @@ ruleset n:Node do
     alias msg:chan[midx] do
 
     rule "receive"
-      (msg.vc = VC2) |
-      (msg.vc = VC1 & MultiSetCount(m:chan, chan[m].vc = VC2)  = 0) |
-      (msg.vc = VC0 & MultiSetCount(m:chan, chan[m].vc = VC2)  = 0 
+      (msg.vc = VC3) |
+      (msg.vc = VC2 & MultiSetCount(m:chan, chan[m].vc = VC3)  = 0) |
+      (msg.vc = VC1 & MultiSetCount(m:chan, chan[m].vc = VC3)  = 0 
+                    & MultiSetCount(m:chan, chan[m].vc = VC2)  = 0) |
+      (msg.vc = VC1 & MultiSetCount(m:chan, chan[m].vc = VC3)  = 0 
+                    & MultiSetCount(m:chan, chan[m].vc = VC2)  = 0
                     & MultiSetCount(m:chan, chan[m].vc = VC1)  = 0)
     ==>
 
@@ -922,8 +635,8 @@ LastWrite := HomeNode.val;
   -- processor initialization
   for i:Proc do
     Procs[i].state := PI;
-    clear Procs[i].icount;
-    clear Procs[i].acount;
+    clear Procs[i].count2;
+    clear Procs[i].count1;
   endfor;
 
   -- network initialization
